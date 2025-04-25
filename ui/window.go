@@ -111,7 +111,7 @@ func detectTerminate(e any) bool {
 func (pw *Visualizer) handleEvent(e any, t screen.Texture) {
 	switch e := e.(type) {
 
-	case size.Event: // Оновлення даних про розмір вікна.
+	case size.Event:
 		pw.sz = e
 		pw.center = image.Pt(pw.sz.WidthPx/2, pw.sz.HeightPx/2)
 		fmt.Println("resized to", pw.sz.HeightPx, "and", pw.sz.WidthPx)
@@ -121,7 +121,6 @@ func (pw *Visualizer) handleEvent(e any, t screen.Texture) {
 
 	case mouse.Event:
 		if t == nil {
-			// TODO: Реалізувати реакцію на натискання кнопки миші.
 			if e.Button == 3 && e.Direction == 1 {
 				pw.center.Y, pw.center.X = int(e.Y), int(e.X)
 			}
@@ -129,11 +128,9 @@ func (pw *Visualizer) handleEvent(e any, t screen.Texture) {
 		}
 
 	case paint.Event:
-		// Малювання контенту вікна.
 		if t == nil {
 			pw.drawDefaultUI()
 		} else {
-			// Використання текстури отриманої через виклик Update.
 			pw.w.Scale(pw.sz.Bounds(), t, t.Bounds(), draw.Src, nil)
 		}
 		pw.w.Publish()
@@ -141,6 +138,10 @@ func (pw *Visualizer) handleEvent(e any, t screen.Texture) {
 }
 
 func (pw *Visualizer) drawFigure() {
+	DrawFigure(pw.w, pw.center)
+}
+
+func DrawFigure(screenUploader screen.Uploader, imagePoint image.Point) {
 	scale := 1
 	colorT := color.RGBA{
 		R: 255,
@@ -149,26 +150,24 @@ func (pw *Visualizer) drawFigure() {
 		A: 0,
 	}
 
-	pw.w.Fill(
-		image.Rect(pw.center.X-225*scale, pw.center.Y-175*scale, pw.center.X+225*scale, pw.center.Y),
+	screenUploader.Fill(
+		image.Rect(imagePoint.X-225*scale, imagePoint.Y-175*scale, imagePoint.X+225*scale, imagePoint.Y),
 		colorT,
 		draw.Src,
 	)
 
-	pw.w.Fill(
-		image.Rect(pw.center.X-75*scale, pw.center.Y-175*scale, pw.center.X+75*scale, pw.center.Y+250*scale),
+	screenUploader.Fill(
+		image.Rect(imagePoint.X-75*scale, imagePoint.Y-175*scale, imagePoint.X+75*scale, imagePoint.Y+250*scale),
 		colorT,
 		draw.Src,
 	)
 }
 
 func (pw *Visualizer) drawDefaultUI() {
-	pw.w.Fill(pw.sz.Bounds(), color.White, draw.Src) // Фон.
+	pw.w.Fill(pw.sz.Bounds(), color.White, draw.Src)
 
-	// TODO: Змінити колір фону та додати відображення фігури у вашому варіанті.
 	pw.drawFigure()
 
-	// Малювання білої рамки.
 	for _, br := range imageutil.Border(pw.sz.Bounds(), 5) {
 		pw.w.Fill(br, color.White, draw.Src)
 	}

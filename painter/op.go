@@ -1,6 +1,8 @@
 package painter
 
 import (
+	"github.com/roman-mazur/architecture-lab-3/ui"
+	"image"
 	"image/color"
 
 	"golang.org/x/exp/shiny/screen"
@@ -8,41 +10,80 @@ import (
 
 // Operation змінює вхідну текстуру.
 type Operation interface {
-	// Do виконує зміну операції, повертаючи true, якщо текстура вважається готовою для відображення.
-	Do(t screen.Texture) (ready bool)
+	Update(state TextureState)
 }
 
-// OperationList групує список операції в одну.
+type Fill struct {
+	Color color.Color
+}
+
+type Update struct{}
+
+type Reset struct{}
+
+type TextureOperation interface {
+	Do(t screen.Texture)
+	Update(state TextureState)
+}
+
+type BgRect struct {
+	X1 float32
+	Y1 float32
+	X2 float32
+	Y2 float32
+}
+
+type Figure struct {
+	X float32
+	Y float32
+}
+
+type Move struct {
+	X float32
+	Y float32
+}
+
 type OperationList []Operation
 
-func (ol OperationList) Do(t screen.Texture) (ready bool) {
-	for _, o := range ol {
-		ready = o.Do(t) || ready
+var UpdateOp = Update{}
+
+func (op Update) Update(state TextureState) {}
+
+func (op Fill) Do(t screen.Texture) {
+	t.Fill(t.Bounds(), op.Color, screen.Src)
+}
+
+func (op Fill) Update(state TextureState) {
+	state.backgroundColor = op
+}
+
+var ResetOp = Reset{}
+
+func (op Reset) Update(state TextureState) {
+	state.backgroundColor = nil
+	state.backgroundRect = nil
+	state.figureCenters = nil
+}
+
+func (op BgRect) Do(t screen.Texture) {
+	t.Fill(image.Rect(int(op.X1), int(op.Y1), int(op.X2), int(op.Y2)), color.Black, screen.Src)
+}
+
+func (op BgRect) Update(state TextureState) {
+	state.backgroundRect = op
+}
+
+func (op Figure) Do(t screen.Texture) {
+	ui.DrawFigure(t, image.Pt(int(op.X), int(op.Y)))
+}
+
+func (op Figure) Update(state TextureState) {
+	state.figureCenters = append(state.figureCenters, op)
+}
+
+func (op Move) Update(state TextureState) {
+	for _, fig := range state.figureCenters {
+		fig.X += op.X
+		fig.Y += op.Y
 	}
-	return
-}
-
-// UpdateOp операція, яка не змінює текстуру, але сигналізує, що текстуру потрібно розглядати як готову.
-var UpdateOp = updateOp{}
-
-type updateOp struct{}
-
-func (op updateOp) Do(t screen.Texture) bool { return true }
-
-// OperationFunc використовується для перетворення функції оновлення текстури в Operation.
-type OperationFunc func(t screen.Texture)
-
-func (f OperationFunc) Do(t screen.Texture) bool {
-	f(t)
-	return false
-}
-
-// WhiteFill зафарбовує тестуру у білий колір. Може бути викоистана як Operation через OperationFunc(WhiteFill).
-func WhiteFill(t screen.Texture) {
-	t.Fill(t.Bounds(), color.White, screen.Src)
-}
-
-// GreenFill зафарбовує тестуру у зелений колір. Може бути викоистана як Operation через OperationFunc(GreenFill).
-func GreenFill(t screen.Texture) {
-	t.Fill(t.Bounds(), color.RGBA{G: 0xff, A: 0xff}, screen.Src)
 }
