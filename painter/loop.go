@@ -2,6 +2,7 @@ package painter
 
 import (
 	"image"
+	"image/color"
 
 	"golang.org/x/exp/shiny/screen"
 )
@@ -20,20 +21,17 @@ type Loop struct {
 	next screen.Texture
 	prev screen.Texture
 
-	mq    MessageQueue
-	state TextureState
-
-	stop    chan struct{}
-	stopReq bool
+	mq       MessageQueue
+	state    TextureState
+	doneFunc func()
 }
 
 var size = image.Pt(400, 400)
 
 func (l *Loop) Start(s screen.Screen) {
 	l.next, _ = s.NewTexture(size)
-	l.prev, _ = s.NewTexture(size)
-	l.mq = MessageQueue{queue: make(chan Operation, 15)}
-	l.state = TextureState{}
+	l.mq = MessageQueue{queue: make(chan Operation)}
+	l.state = TextureState{backgroundColor: &Fill{Color: color.White}}
 
 	go func() {
 		for {
@@ -41,15 +39,24 @@ func (l *Loop) Start(s screen.Screen) {
 
 			switch e.(type) {
 			case Figure, BgRect, Move, Fill, Reset:
-				e.Update(l.state)
+				e.Update(&l.state)
 			case Update:
-				t, _ := s.NewTexture(size)
-				l.state.backgroundColor.Do(t)
-				l.state.backgroundRect.Do(t)
-				for _, fig := range l.state.figureCenters {
-					fig.Do(t)
+				l.state.backgroundColor.Do(l.next)
+
+				if l.state.backgroundRect != nil {
+					l.state.backgroundRect.Do(l.next)
 				}
-				l.Receiver.Update(t)
+
+				for _, fig := range l.state.figureCenters {
+					fig.Do(l.next)
+				}
+				l.prev = l.next
+				l.Receiver.Update(l.next)
+				l.next, _ = s.NewTexture(size)
+			}
+
+			if l.doneFunc != nil {
+				l.doneFunc()
 			}
 		}
 	}()

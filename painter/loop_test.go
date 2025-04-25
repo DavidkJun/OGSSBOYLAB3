@@ -1,106 +1,187 @@
 package painter
 
 import (
+	"errors"
+	"golang.org/x/exp/shiny/screen"
+	"golang.org/x/image/draw"
 	"image"
 	"image/color"
-	"image/draw"
-	"reflect"
 	"testing"
-
-	"golang.org/x/exp/shiny/screen"
 )
 
-func TestLoop_Post(t *testing.T) {
-	var (
-		l  Loop
-		tr testReceiver
-	)
-	l.Receiver = &tr
+type FakeReceiver struct {
+	updateCounter int
+}
 
-	var testOps []string
+func (r *FakeReceiver) Update(_ screen.Texture) {
+	r.updateCounter++
+}
 
-	l.Start(mockScreen{})
-	l.Post(logOp(t, "do white fill", WhiteFill))
-	l.Post(logOp(t, "do green fill", GreenFill))
-	l.Post(UpdateOp)
+type DummyScreen struct{}
 
-	for i := 0; i < 3; i++ {
-		go l.Post(logOp(t, "do green fill", GreenFill))
-	}
+func (ds DummyScreen) NewBuffer(_ image.Point) (screen.Buffer, error) {
+	return nil, errors.New("not implemented")
+}
+func (ds DummyScreen) NewTexture(_ image.Point) (screen.Texture, error) {
+	return nil, errors.New("not implemented")
+}
+func (ds DummyScreen) NewWindow(_ *screen.NewWindowOptions) (screen.Window, error) {
+	return nil, errors.New("not implemented")
+}
 
-	l.Post(OperationFunc(func(screen.Texture) {
-		testOps = append(testOps, "op 1")
-		l.Post(OperationFunc(func(screen.Texture) {
-			testOps = append(testOps, "op 2")
-		}))
-	}))
-	l.Post(OperationFunc(func(screen.Texture) {
-		testOps = append(testOps, "op 3")
-	}))
+type TextureStub struct{}
 
-	l.StopAndWait()
+func (ts TextureStub) Release() {}
+func (ts TextureStub) Size() image.Point {
+	return image.Point{}
+}
+func (ts TextureStub) Bounds() image.Rectangle {
+	return image.Rectangle{}
+}
+func (ts TextureStub) Upload(_ image.Point, _ screen.Buffer, _ image.Rectangle) {}
+func (ts TextureStub) Fill(_ image.Rectangle, _ color.Color, _ draw.Op)         {}
 
-	if tr.lastTexture == nil {
-		t.Fatal("Texture was not updated")
-	}
-	mt, ok := tr.lastTexture.(*mockTexture)
-	if !ok {
-		t.Fatal("Unexpected texture", tr.lastTexture)
-	}
-	if mt.Colors[0] != color.White {
-		t.Error("First color is not white:", mt.Colors)
-	}
-	if len(mt.Colors) != 2 {
-		t.Error("Unexpected size of colors:", mt.Colors)
-	}
+type SignalMonitor struct {
+	expected int
+	signal   chan struct{}
+}
 
-	if !reflect.DeepEqual(testOps, []string{"op 1", "op 2", "op 3"}) {
-		t.Error("Bad order:", testOps)
+func (sm SignalMonitor) trigger() {
+	sm.signal <- struct{}{}
+}
+
+func (sm SignalMonitor) await() {
+	for i := 0; i < sm.expected; i++ {
+		<-sm.signal
 	}
 }
 
-func logOp(t *testing.T, msg string, op OperationFunc) OperationFunc {
-	return func(tx screen.Texture) {
-		t.Log(msg)
-		op(tx)
+func newSignalMonitor(expected int) SignalMonitor {
+	return SignalMonitor{expected: expected, signal: make(chan struct{}, expected)}
+}
+
+func TestFinalColorIsBlack(t *testing.T) {
+	cmds := OperationList{
+		Fill{Color: color.RGBA{R: 255, G: 100, B: 0, A: 255}},
+		Fill{Color: color.Black},
+	}
+
+	monitor := newSignalMonitor(len(cmds))
+	loop := Loop{Receiver: &FakeReceiver{}, doneFunc: monitor.trigger}
+
+	loop.Start(DummyScreen{})
+	loop.Post(cmds)
+
+	monitor.await()
+
+	if loop.state.backgroundColor.Color != color.Black {
+		t.Error("Expected final background color to be black")
 	}
 }
 
-type testReceiver struct {
-	lastTexture screen.Texture
+func TestInitialStateIsCorrect(t *testing.T) {
+	loop := Loop{Receiver: &FakeReceiver{}}
+	loop.Start(DummyScreen{})
+	loop.Post(OperationList{})
+
+	if loop.state.backgroundColor.Color != color.White ||
+		loop.state.backgroundRect != nil ||
+		loop.state.figureCenters != nil {
+		t.Error("Default state not properly initialized")
+	}
 }
 
-func (tr *testReceiver) Update(t screen.Texture) {
-	tr.lastTexture = t
+func TestFinalFillWins(t *testing.T) {
+	cmds := OperationList{
+		Fill{Color: color.RGBA{R: 200, G: 100, B: 100, A: 255}},
+		Fill{Color: color.Gray{Y: 10}},
+		Fill{Color: color.White},
+		Fill{Color: color.Black},
+	}
+
+	monitor := newSignalMonitor(len(cmds))
+	loop := Loop{Receiver: &FakeReceiver{}, doneFunc: monitor.trigger}
+	loop.Start(DummyScreen{})
+	loop.Post(cmds)
+	monitor.await()
+
+	if loop.state.backgroundColor.Color != color.Black {
+		t.Error("Latest fill should determine the final background color")
+	}
 }
 
-type mockScreen struct{}
+func TestLastBgRectStored(t *testing.T) {
+	cmds := OperationList{
+		BgRect{X1: 0.0, Y1: 0.0, X2: 0.2, Y2: 0.3},
+		BgRect{X1: 0.6, Y1: 0.7, X2: 0.9, Y2: 0.95},
+	}
 
-func (m mockScreen) NewBuffer(size image.Point) (screen.Buffer, error) {
-	panic("implement me")
+	expected := BgRect{X1: 0.6, Y1: 0.7, X2: 0.9, Y2: 0.95}
+	monitor := newSignalMonitor(len(cmds))
+	loop := Loop{Receiver: &FakeReceiver{}, doneFunc: monitor.trigger}
+	loop.Start(DummyScreen{})
+	loop.Post(cmds)
+	monitor.await()
+
+	if *loop.state.backgroundRect != expected {
+		t.Error("Expected most recent BgRect to be stored")
+	}
 }
 
-func (m mockScreen) NewTexture(size image.Point) (screen.Texture, error) {
-	return new(mockTexture), nil
+func TestFigurePlacement(t *testing.T) {
+	cmds := OperationList{
+		Figure{X: 0.05, Y: 0.15},
+		Figure{X: 0.25, Y: 0.35},
+	}
+
+	expected1 := Figure{X: 0.05, Y: 0.15}
+	expected2 := Figure{X: 0.25, Y: 0.35}
+
+	monitor := newSignalMonitor(len(cmds))
+	loop := Loop{Receiver: &FakeReceiver{}, doneFunc: monitor.trigger}
+	loop.Start(DummyScreen{})
+	loop.Post(cmds)
+	monitor.await()
+
+	if *loop.state.figureCenters[0] != expected1 || *loop.state.figureCenters[1] != expected2 {
+		t.Error("Figure coordinates do not match expected values")
+	}
 }
 
-func (m mockScreen) NewWindow(opts *screen.NewWindowOptions) (screen.Window, error) {
-	panic("implement me")
+func TestFullReset(t *testing.T) {
+	cmds := OperationList{
+		Figure{X: 0.1, Y: 0.1},
+		BgRect{X1: 0.2, Y1: 0.2, X2: 0.3, Y2: 0.3},
+		Fill{Color: color.RGBA{R: 0x11, G: 0x22, B: 0x33, A: 255}},
+		Reset{},
+	}
+
+	monitor := newSignalMonitor(len(cmds))
+	loop := Loop{Receiver: &FakeReceiver{}, doneFunc: monitor.trigger}
+	loop.Start(DummyScreen{})
+	loop.Post(cmds)
+	monitor.await()
+
+	if loop.state.figureCenters != nil || loop.state.backgroundRect != nil || loop.state.backgroundColor.Color != color.Black {
+		t.Error("Reset failed to restore initial state")
+	}
 }
 
-type mockTexture struct {
-	Colors []color.Color
-}
+func TestReceiverUpdate(t *testing.T) {
+	cmds := OperationList{
+		Fill{Color: color.RGBA{R: 0xaa, G: 0xbb, B: 0xcc, A: 255}},
+		Update{},
+	}
 
-func (m *mockTexture) Release() {}
+	receiver := &FakeReceiver{}
+	monitor := newSignalMonitor(len(cmds))
+	loop := Loop{Receiver: receiver, doneFunc: monitor.trigger}
+	loop.Start(DummyScreen{})
+	loop.next = TextureStub{}
+	loop.Post(cmds)
+	monitor.await()
 
-func (m *mockTexture) Size() image.Point { return size }
-
-func (m *mockTexture) Bounds() image.Rectangle {
-	return image.Rectangle{Max: m.Size()}
-}
-
-func (m *mockTexture) Upload(dp image.Point, src screen.Buffer, sr image.Rectangle) {}
-func (m *mockTexture) Fill(dr image.Rectangle, src color.Color, op draw.Op) {
-	m.Colors = append(m.Colors, src)
+	if receiver.updateCounter != 1 {
+		t.Error("Update command did not notify receiver")
+	}
 }
