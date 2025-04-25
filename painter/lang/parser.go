@@ -1,9 +1,13 @@
 package lang
 
 import (
-	"io"
-
+	"bufio"
+	"errors"
 	"github.com/roman-mazur/architecture-lab-3/painter"
+	"image/color"
+	"io"
+	"strconv"
+	"strings"
 )
 
 type Parser struct {
